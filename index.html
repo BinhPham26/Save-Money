@@ -39,6 +39,10 @@
           <i data-lucide="piggy-bank"></i>
           <span>Tích lũy</span>
         </button>
+        <button class="nav-item" data-tab="investment">
+          <i data-lucide="trending-up"></i>
+          <span>Danh mục đầu tư</span>
+        </button>
         <button class="nav-item" data-tab="todo">
           <i data-lucide="check-square"></i>
           <span>To Do Task</span>
@@ -204,6 +208,44 @@
         </div>
       </div>
 
+      <div id="tab-investment" class="tab-pane">
+        <div class="section-header">
+          <h2>Danh mục Đầu tư</h2>
+          <button class="btn-primary" id="btn-add-investment">
+            <i data-lucide="plus"></i> Thêm danh mục
+          </button>
+        </div>
+
+        <!-- Investment Global Summary -->
+        <div id="investment-summary-board" class="stats-grid"
+          style="grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 2rem;">
+          <!-- Injected by JS -->
+        </div>
+
+        <!-- Investment Chart Section -->
+        <div class="charts-section" style="margin-bottom: 2rem; display: flex; flex-direction: column; gap: 1.5rem;">
+          <div class="chart-container" style="display: flex; gap: 2rem; flex-wrap: wrap; align-items: flex-start;">
+            <div style="flex: 1; min-width: 250px; max-width: 380px;">
+              <h4 style="margin-bottom: 1rem; text-align: center;">Biểu đồ Lợi nhuận (Các hạng mục có lời)</h4>
+              <div class="chart-wrapper" style="height: 220px; position: relative;">
+                <canvas id="investment-profit-chart"></canvas>
+              </div>
+            </div>
+            <div style="flex: 1; min-width: 250px;">
+              <h4 style="margin-bottom: 1rem;">Chi tiết Lợi nhuận</h4>
+              <div id="investment-legend-list"
+                style="display: flex; flex-direction: column; gap: 0.75rem; max-height: 220px; overflow-y: auto;">
+                <!-- Legend Items Injected by JS -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="goals-grid" id="investment-grid">
+          <!-- Rendered Investments -->
+        </div>
+      </div>
+
       <div id="tab-todo" class="tab-pane">
         <div class="todo-container">
           <div class="todo-header">
@@ -225,7 +267,7 @@
     </main>
 
     <!-- Floating Action Button -->
-    <button class="fab" id="btn-fab-add">
+    <button class="fab" id="btn-fab-add" title="Nhấn Ctrl + R để thêm nhanh">
       <i data-lucide="plus"></i>
     </button>
 
@@ -478,6 +520,88 @@
         <div class="history-list" id="goal-history-list"
           style="max-height:300px; overflow-y:auto; display:flex; flex-direction:column; gap:0.5rem;">
           <!-- Items -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Investment Modal -->
+    <div class="modal-overlay hidden" id="modal-investment">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 id="inv-modal-title">Thêm danh mục</h2>
+          <div class="modal-actions" style="display:flex; align-items:center; gap:0.5rem">
+            <button id="btn-delete-inv" class="btn-icon-danger hidden" type="button" title="Xóa danh mục">
+              <i data-lucide="trash-2"></i>
+            </button>
+            <button class="btn-close-modal"><i data-lucide="x"></i></button>
+          </div>
+        </div>
+
+        <div class="modal-tabs">
+          <button class="modal-tab active" data-modal-tab="inv-info">Thông tin</button>
+          <button class="modal-tab" data-modal-tab="inv-history">Giao dịch (Lời/Lỗ)</button>
+        </div>
+
+        <!-- Tab Info -->
+        <div id="inv-tab-info" class="modal-tab-content">
+          <form id="form-inv">
+            <input type="hidden" id="inv-id">
+            <div class="form-group">
+              <label>Tên danh mục</label>
+              <input type="text" id="inv-name" required placeholder="Ví dụ: Chứng khoán, Vàng...">
+            </div>
+            <div class="form-group">
+              <label>Màu sắc</label>
+              <input type="color" id="inv-color" value="#8b5cf6"
+                style="width: 100%; height: 40px; border-radius: 8px; cursor: pointer;">
+            </div>
+            <div class="modal-footer" style="padding-top: 1rem; border-top: 1px solid var(--border);">
+              <button type="submit" class="btn-submit">Lưu thông tin</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Tab History -->
+        <div id="inv-tab-history" class="modal-tab-content hidden">
+          <div class="invest-summary"
+            style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1rem;">
+            <div
+              style="background:var(--surface); padding:0.5rem; border-radius:8px; border:1px solid var(--border); text-align:center;">
+              <p style="font-size:0.75rem; color:var(--text-muted)">Tổng chi (Vốn)</p>
+              <p id="inv-capital-display" style="font-weight:700;">0 ₫</p>
+            </div>
+            <div
+              style="background:var(--surface); padding:0.5rem; border-radius:8px; border:1px solid var(--border); text-align:center;">
+              <p style="font-size:0.75rem; color:var(--text-muted)">Tổng thu (Doanh thu)</p>
+              <p id="inv-revenue-display" style="font-weight:700;">0 ₫</p>
+            </div>
+          </div>
+
+          <div class="calc-preview"
+            style="background:#f8fafc; padding:0.75rem; border-radius:8px; margin-bottom:1rem; text-align:center; border:1px solid var(--border);">
+            <p style="font-size:0.85rem; color:#64748b;">Chênh lệch (Tổng thu - Tổng chi):</p>
+            <p id="inv-total-display" style="font-size:1.2rem; font-weight:800; color:var(--primary);">0 ₫</p>
+          </div>
+
+          <form id="form-inv-transaction"
+            style="margin-bottom:1rem; padding-bottom:1rem; border-bottom:1px solid var(--border);">
+            <p style="font-weight:600; margin-bottom:0.5rem;">Giao dịch mới</p>
+            <div class="form-row">
+              <div class="form-group">
+                <label style="font-size:0.8rem">Tiền Chi (Vốn ra)</label>
+                <input type="number" id="inv-trans-out" placeholder="0" value="0">
+              </div>
+              <div class="form-group">
+                <label style="font-size:0.8rem">Tiền Thu (Doanh thu/Bán)</label>
+                <input type="number" id="inv-trans-in" placeholder="0" value="0">
+              </div>
+            </div>
+            <button type="submit" class="btn-secondary" style="width:100%">Lưu giao dịch</button>
+          </form>
+
+          <div class="history-list" id="inv-history-list" style="max-height:200px; overflow-y:auto; margin-top:1rem;">
+            <!-- Transaction History -->
+          </div>
         </div>
       </div>
     </div>
