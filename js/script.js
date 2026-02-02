@@ -10,7 +10,8 @@ const STORAGE_KEYS = {
     THEME: 'theme',
     GOALS: 'goals',
     SHOPPING_LIST: 'shopping_list',
-    TODOS: 'todos'
+    TODOS: 'todos',
+    INVESTMENTS: 'investments'
 };
 
 let expenseChartInstance = null;
@@ -34,6 +35,7 @@ const State = {
     goals: [],
     shoppingList: [],
     todos: [],
+    investments: [],
     monthlyLimits: {},
     currentDate: new Date(),
     viewMode: 'daily', // daily, weekly, monthly
@@ -91,6 +93,7 @@ function loadData() {
     State.installments = Storage.get(STORAGE_KEYS.INSTALLMENTS, []);
     State.goals = Storage.get(STORAGE_KEYS.GOALS, []);
     State.todos = Storage.get(STORAGE_KEYS.TODOS, []);
+    State.investments = Storage.get(STORAGE_KEYS.INVESTMENTS, []);
     State.monthlyLimits = Storage.get(STORAGE_KEYS.LIMITS, {});
 
     // Theme
@@ -104,6 +107,7 @@ function saveData(key) {
     if (key === 'installments') Storage.set(STORAGE_KEYS.INSTALLMENTS, State.installments);
     if (key === 'goals') Storage.set(STORAGE_KEYS.GOALS, State.goals);
     if (key === 'todos') Storage.set(STORAGE_KEYS.TODOS, State.todos);
+    if (key === 'investments') Storage.set(STORAGE_KEYS.INVESTMENTS, State.investments);
     if (key === 'limits') Storage.set(STORAGE_KEYS.LIMITS, State.monthlyLimits);
 }
 
@@ -250,12 +254,17 @@ function setupEventListeners() {
     const filterPanel = document.getElementById('filter-panel');
     btnToggleFilter.addEventListener('click', () => filterPanel.classList.toggle('hidden'));
 
-    // Global Escape to close modals
+    // Global Escape to close modals & Ctrl+R
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(el => {
                 el.classList.add('hidden');
             });
+        }
+        // Ctrl+R to open Add Expense
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R')) {
+            e.preventDefault(); // Prevent page reload
+            openTransactionModal();
         }
     });
 
@@ -273,6 +282,7 @@ function setupEventListeners() {
     bulkInput.valueAsDate = new Date();
 
     setupAccumulationListeners();
+    setupInvestmentListeners();
 
     const updateBulkHint = () => {
         const val = bulkInput.value;
@@ -362,6 +372,7 @@ function switchTab(tabName) {
     if (tabName === 'installments') renderInstallments();
     if (tabName === 'accumulation') renderAccumulation();
     if (tabName === 'todo') renderTodos();
+    if (tabName === 'investment') renderInvestments();
 }
 
 // ... (Existing code) Use multireplace for better insertion if needed, but here we append the Logic functions.
@@ -439,13 +450,24 @@ function renderCategorySettings() {
         <div class="category-setting-item">
              <div class="cat-left">
                 <input type="color" class="color-picker-mini" value="${c.color}" onchange="updateCategoryColor('${c.id}', this.value)">
-                <span>${c.name}</span>
+                <input type="text" class="cat-name-edit" value="${c.name}" onchange="updateCategoryName('${c.id}', this.value)">
              </div>
-             ${!c.isDefault ? `<button onclick="deleteCategory('${c.id}')" class="btn-icon-danger"><i data-lucide="trash-2"></i></button>` : ''}
+             <button onclick="deleteCategory('${c.id}')" class="btn-icon-danger"><i data-lucide="trash-2"></i></button>
         </div>
     `).join('');
     if (window.lucide) lucide.createIcons();
 }
+
+window.updateCategoryName = (id, newName) => {
+    const cat = State.categories.find(c => c.id === id);
+    if (cat && newName.trim()) {
+        cat.name = newName.trim();
+        saveData('categories');
+        renderCategoryOptions();
+        renderHistory();
+        renderDashboard();
+    }
+};
 
 window.updateCategoryColor = (id, newColor) => {
     const cat = State.categories.find(c => c.id === id);
@@ -1428,11 +1450,11 @@ function renderPieChart() {
     sortedCats.forEach(catId => {
         const cat = State.categories.find(c => c.id === catId);
         if (cat) {
-            labels.push(cat.name);
+            labels.push(`${cat.name} (${formatCurrency(catTotals[catId])})`);
             data.push(catTotals[catId]);
             colors.push(cat.color);
         } else {
-            labels.push('Khác');
+            labels.push(`Khác (${formatCurrency(catTotals[catId])})`);
             data.push(catTotals[catId]);
             colors.push('#cbd5e1');
         }
@@ -1796,3 +1818,409 @@ function updateActiveClasses(nodeList, activeNode) {
 
 // Initialize
 window.addEventListener('DOMContentLoaded', init);
+
+
+// --- Investment Logic ---
+
+function renderInvestments() {
+    const grid = document.getElementById('investment-grid');
+    const summaryBoard = document.getElementById('investment-summary-board');
+
+    // --- Migration & Summary Board ---
+    let totalInvested = 0;
+    let totalRevenue = 0;
+
+    // Auto-migrate old data structure if needed
+    // Old: capital, profit. New: invested, revenue.
+    // revenue = capital + profit. invested = capital.
+    State.investments.forEach(inv => {
+        if (typeof inv.invested === 'undefined') {
+            inv.invested = inv.capital || 0;
+            inv.revenue = (inv.capital || 0) + (inv.profit || 0);
+            // Cleanup old keys if desired, or keep for safety. Let's just use new ones.
+        }
+        totalInvested += inv.invested;
+        totalRevenue += inv.revenue;
+    });
+
+    // Save migration if it happened
+    if (State.investments.length > 0 && typeof State.investments[0].capital !== 'undefined') {
+        // We can do a one-time clean or just save.
+        // Let's remove old keys to be clean.
+        State.investments.forEach(inv => {
+            if (typeof inv.capital !== 'undefined') {
+                delete inv.capital;
+                delete inv.profit;
+            }
+        });
+        saveData('investments');
+    }
+
+    const totalNet = totalRevenue - totalInvested; // Lời/Lỗ = Thu - Chi
+    const isNetProfit = totalNet >= 0;
+
+    if (summaryBoard) {
+        summaryBoard.innerHTML = `
+           <div class="stat-card-gradient" style="background: linear-gradient(to right, #3b82f6, #2563eb);">
+               <h3 class="stat-card-title">Tổng Chi (Vốn)</h3>
+               <p class="stat-card-value">${formatCurrency(totalInvested)}</p>
+           </div>
+
+           <div class="stat-card-gradient" style="background: linear-gradient(to right, #8b5cf6, #7c3aed);">
+               <h3 class="stat-card-title">Tổng Thu</h3>
+               <p class="stat-card-value">${formatCurrency(totalRevenue)}</p>
+           </div>
+           
+           <div class="stat-card-gradient" style="background: linear-gradient(to right, ${isNetProfit ? '#10b981, #059669' : '#ef4444, #dc2626'});">
+               <h3 class="stat-card-title">Tổng Lời/Lỗ</h3>
+               <p class="stat-card-value">${isNetProfit ? '+' : ''}${formatCurrency(totalNet)}</p>
+           </div>
+        `;
+    }
+
+    // --- Grid ---
+    if (State.investments.length === 0) {
+        grid.innerHTML = '<p class="empty-state">Chưa có danh mục nào.</p>';
+        return;
+    }
+
+    grid.innerHTML = State.investments.map(inv => {
+        // Logic:
+        // Invested (Chi)
+        // Revenue (Thu)
+        // Net = Thu - Chi (Tổng đang có/Lời lỗ)
+
+        const net = inv.revenue - inv.invested; // "Tổng đang có" logic per user request
+        const isProfit = net >= 0;
+
+        return `
+            <div class="card goal-card" onclick="openInvestmentModal('${inv.id}')">
+                <div class="goal-header">
+                    <div style="display:flex; align-items:center; gap:0.5rem">
+                         <div style="width:12px; height:12px; border-radius:50%; background:${inv.color || '#8b5cf6'}"></div>
+                         <h3>${inv.name}</h3>
+                    </div>
+                    <button class="btn-icon-sm" onclick="openInvestmentHistory('${inv.id}', event)" title="Xem lịch sử">
+                        <i data-lucide="history"></i>
+                    </button>
+                </div>
+                
+                <div style="margin-bottom:0.5rem">
+                    <p style="font-size:0.75rem; color:var(--text-muted)">Tổng đang có (Lời/Lỗ)</p>
+                    <p style="font-size:1.25rem; font-weight:700; color:${isProfit ? 'var(--success)' : 'var(--danger)'}">
+                        ${isProfit ? '+' : ''}${formatCurrency(net)}
+                    </p>
+                </div>
+                
+                <div style="display:flex; justify-content:space-between; border-top:1px solid var(--border); padding-top:0.5rem; font-size:0.85rem;">
+                    <div>
+                        <span style="color:var(--text-muted)">Tổng Chi:</span>
+                        <span style="font-weight:600">${formatCurrency(inv.invested || 0)}</span>
+                    </div>
+                    <div>
+                        <span style="color:var(--text-muted)">Tổng Thu:</span>
+                         <span style="font-weight:600">${formatCurrency(inv.revenue || 0)}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    if (window.lucide) lucide.createIcons();
+
+    // Render Chart
+    renderInvestmentChart();
+}
+
+let investmentChartInstance = null;
+
+function renderInvestmentChart() {
+    const ctx = document.getElementById('investment-profit-chart');
+    const legendContainer = document.getElementById('investment-legend-list');
+
+    if (!ctx || !legendContainer) return;
+
+    // 1. Prepare Data
+    // Chart Data: Only Profitable Items (Net > 0)
+    const profitableInv = State.investments
+        .map(inv => {
+            const net = (inv.revenue || 0) - (inv.invested || 0);
+            return {
+                ...inv,
+                net: net
+            };
+        })
+        .filter(item => item.net > 0);
+
+    // Legend Data: All Items
+    const allInvSorted = State.investments.map(inv => {
+        const net = (inv.revenue || 0) - (inv.invested || 0);
+        return { ...inv, net };
+    }).sort((a, b) => b.net - a.net); // Sort high to low profit
+
+    // 2. Render Chart
+    if (investmentChartInstance) {
+        investmentChartInstance.destroy();
+    }
+
+    if (profitableInv.length > 0) {
+        investmentChartInstance = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: profitableInv.map(i => i.name),
+                datasets: [{
+                    data: profitableInv.map(i => i.net),
+                    backgroundColor: profitableInv.map(i => i.color || '#8b5cf6'),
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false // We use custom legend
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function (context) {
+                                let label = context.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                const value = context.raw;
+                                const total = context.chart.data.datasets[0].data.reduce((a, b) => a + b, 0);
+                                const percentage = Math.round((value / total) * 100) + '%';
+                                label += formatCurrency(value) + ' (' + percentage + ')';
+                                return label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } else {
+        // Clear canvas if no profit
+        ctx.getContext('2d').clearRect(0, 0, ctx.width, ctx.height);
+        // Optional: Draw text "Chưa có lợi nhuận"
+        const ctx2d = ctx.getContext('2d');
+        ctx2d.font = "14px Inter";
+        ctx2d.fillStyle = "#64748b";
+        ctx2d.textAlign = "center";
+        ctx2d.fillText("Chưa có danh mục nào có lời", ctx.width / 2, ctx.height / 2);
+    }
+
+    // 3. Render Legend List
+    legendContainer.innerHTML = allInvSorted.map(inv => {
+        const isProfit = inv.net >= 0;
+        return `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid var(--border);">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <div style="width: 12px; height: 12px; rounded: 50%; border-radius: 50%; background-color: ${inv.color || '#ccc'}"></div>
+                    <span style="font-weight: 500; font-size: 0.9rem;">${inv.name}</span>
+                </div>
+                <span style="font-weight: 600; font-size: 0.9rem; color: ${isProfit ? 'var(--success)' : 'var(--danger)'}">
+                    ${isProfit ? '+' : ''}${formatCurrency(inv.net)}
+                </span>
+            </div>
+        `;
+    }).join('');
+}
+
+window.openInvestmentHistory = function (id, event) {
+    event.stopPropagation();
+    openInvestmentModal(id, 'history');
+};
+
+window.openInvestmentModal = function (id = null, viewMode = 'full') {
+    document.getElementById('form-inv').reset();
+    document.getElementById('form-inv-transaction').reset();
+    document.getElementById('inv-id').value = '';
+    document.getElementById('inv-modal-title').textContent = 'Thêm danh mục';
+    document.getElementById('inv-color').value = '#8b5cf6';
+
+    // Manage Tabs Visibility based on viewMode
+    const modalTabs = document.querySelector('#modal-investment .modal-tabs');
+    const transForm = document.getElementById('form-inv-transaction');
+
+    if (viewMode === 'history') {
+        modalTabs.classList.add('hidden');
+        if (transForm) transForm.classList.add('hidden');
+    } else {
+        modalTabs.classList.remove('hidden');
+        if (transForm) transForm.classList.remove('hidden');
+    }
+
+    const btnDel = document.getElementById('btn-delete-inv');
+    if (btnDel) btnDel.classList.add('hidden'); // Hide by default
+
+    // Hide history/transaction tab for new items or force info first
+    if (viewMode === 'history') {
+        switchInvestmentModalTab('inv-history');
+    } else {
+        // If editing existing item (id present), default to History tab
+        // If creating new item (id null), default to Info tab
+        if (id) {
+            switchInvestmentModalTab('inv-history');
+        } else {
+            switchInvestmentModalTab('inv-info');
+        }
+    }
+    document.getElementById('inv-capital-display').textContent = formatCurrency(0);
+    document.getElementById('inv-revenue-display').textContent = formatCurrency(0);
+    document.getElementById('inv-total-display').textContent = formatCurrency(0);
+    document.getElementById('inv-history-list').innerHTML = '';
+
+    if (id) {
+        const inv = State.investments.find(x => x.id === id);
+        if (inv) {
+            document.getElementById('inv-id').value = inv.id;
+            document.getElementById('inv-name').value = inv.name;
+            document.getElementById('inv-color').value = inv.color || '#8b5cf6';
+            document.getElementById('inv-modal-title').textContent = 'Chi tiết đầu tư';
+
+            if (btnDel) {
+                btnDel.classList.remove('hidden');
+                btnDel.onclick = (e) => {
+                    e.preventDefault();
+                    if (confirm('Xóa danh mục đầu tư này?')) {
+                        State.investments = State.investments.filter(x => x.id !== id);
+                        saveData('investments');
+                        document.getElementById('modal-investment').classList.add('hidden');
+                        renderInvestments();
+                    }
+                };
+            }
+
+            updateInvestmentDisplays(inv);
+            renderInvestmentHistory(inv);
+        }
+    }
+    document.getElementById('modal-investment').classList.remove('hidden');
+};
+
+function renderInvestmentHistory(inv) {
+    const list = document.getElementById('inv-history-list');
+    if (!inv.history || inv.history.length === 0) {
+        list.innerHTML = '<p class="text-muted" style="text-align:center; padding:1rem;">Chưa có giao dịch</p>';
+        return;
+    }
+
+    // Reverse sort
+    const sorted = [...inv.history].sort((a, b) => new Date(b.date) - new Date(a.date) || 0);
+
+    list.innerHTML = sorted.map(h => {
+        // dOut (Chi), dIn (Thu)
+        const dOut = h.out || 0;
+        const dIn = h.in || 0;
+        return `
+            <div style="padding:0.5rem; border-bottom:1px solid var(--border); font-size:0.85rem;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem;">
+                     <span style="color:var(--text-muted)">${new Date(h.date).toLocaleString('vi-VN')}</span>
+                     ${dOut > 0 ? `<span style="color:var(--danger); font-weight:600;">- Chi: ${formatCurrency(dOut)}</span>` : ''}
+                     ${dIn > 0 ? `<span style="color:var(--success); font-weight:600;">+ Thu: ${formatCurrency(dIn)}</span>` : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateInvestmentDisplays(inv) {
+    const invested = inv.invested || 0;
+    const revenue = inv.revenue || 0;
+    const net = revenue - invested;
+    const isProfit = net >= 0;
+
+    document.getElementById('inv-capital-display').textContent = formatCurrency(invested);
+    document.getElementById('inv-revenue-display').textContent = formatCurrency(revenue);
+
+    // Total Display (Net)
+    const tEl = document.getElementById('inv-total-display');
+    tEl.textContent = `${isProfit ? '+' : ''}${formatCurrency(net)}`;
+    tEl.style.color = isProfit ? 'var(--success)' : 'var(--danger)';
+}
+
+function switchInvestmentModalTab(tabId) {
+    document.querySelectorAll('.modal-tab').forEach(b => {
+        const t = b.dataset.modalTab;
+        if (!t) return;
+        if (t === tabId) b.classList.add('active');
+        else b.classList.remove('active');
+    });
+    document.querySelectorAll('.modal-tab-content').forEach(c => {
+        if (!c.id) return;
+        // Map inv-info -> inv-tab-info
+        if (c.id === `inv-tab-${tabId.split('-')[1]}`) c.classList.remove('hidden');
+        else c.classList.add('hidden');
+    });
+}
+
+function handleInvestmentSubmit(e) {
+    e.preventDefault();
+    const id = document.getElementById('inv-id').value;
+    const name = document.getElementById('inv-name').value;
+    const color = document.getElementById('inv-color').value;
+
+    if (id) {
+        const inv = State.investments.find(x => x.id === id);
+        if (inv) {
+            inv.name = name;
+            inv.color = color;
+        }
+    } else {
+        State.investments.push({
+            id: generateId(),
+            name,
+            color,
+            invested: 0,
+            revenue: 0,
+            history: []
+        });
+    }
+    saveData('investments');
+    document.getElementById('modal-investment').classList.add('hidden'); // Close on create or edit
+    renderInvestments();
+}
+
+function handleInvestmentTransaction(e) {
+    e.preventDefault();
+    const id = document.getElementById('inv-id').value;
+    if (!id) return;
+
+    const inv = State.investments.find(x => x.id === id);
+    if (!inv) return;
+
+    const dOut = parseFloat(document.getElementById('inv-trans-out').value) || 0; // Chi
+    const dIn = parseFloat(document.getElementById('inv-trans-in').value) || 0;   // Thu
+
+    if (dOut === 0 && dIn === 0) return;
+
+    inv.invested = (inv.invested || 0) + dOut;
+    inv.revenue = (inv.revenue || 0) + dIn;
+
+    // Record history
+    if (!inv.history) inv.history = [];
+    inv.history.push({
+        date: new Date().toISOString(),
+        out: dOut,
+        in: dIn
+    });
+
+    saveData('investments');
+    updateInvestmentDisplays(inv);
+    renderInvestmentHistory(inv);
+    document.getElementById('form-inv-transaction').reset();
+    renderInvestments(); // Update background
+}
+
+function setupInvestmentListeners() {
+    document.getElementById('btn-add-investment').addEventListener('click', () => openInvestmentModal());
+    document.getElementById('form-inv').addEventListener('submit', handleInvestmentSubmit);
+    document.getElementById('form-inv-transaction').addEventListener('submit', handleInvestmentTransaction);
+
+    document.querySelectorAll('.modal-tab').forEach(btn => {
+        if (btn.dataset.modalTab && btn.dataset.modalTab.startsWith('inv-')) {
+            btn.addEventListener('click', () => switchInvestmentModalTab(btn.dataset.modalTab));
+        }
+    });
+}
