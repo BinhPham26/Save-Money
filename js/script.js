@@ -75,19 +75,55 @@ const formatDate = (dateStr) => {
 
 const generateId = () => Date.now().toString();
 
-// --- Core Initialization ---
-function init() {
-    loadData();
-    setupEventListeners();
-    renderApp();
-    setupTheme();
-    // Initialize Lucide icons
-    if (window.lucide) {
-        lucide.createIcons();
+const getUniqueColor = (existingItems) => {
+    const defaultColors = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#a855f7', '#14b8a6', '#f43f5e'];
+    const usedColors = existingItems.map(item => item.color).filter(Boolean);
+    const available = defaultColors.filter(c => !usedColors.includes(c));
+    if (available.length > 0) {
+        return available[Math.floor(Math.random() * available.length)];
     }
+    return '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+};
+
+// --- Core Initialization ---
+// --- Core Initialization ---
+async function init() {
+    // 1. Setup Listeners & UI State IMMEDIATELY (Don't wait for data)
+    setupAuthListeners();
+
+    // Check session
+    if (AuthService.checkSession()) {
+        console.log("Session restored");
+    }
+
+    updateAuthUI(); // Update UI based on restored session
+
+    // 2. Load Data (Async - might take time)
+    try {
+        await loadData();
+    } catch (e) {
+        console.error("Init loadData failed", e);
+    }
+
+    // 3. Render App
+    setupEventListeners(); // Main app listeners
+    renderApp();
+    renderInvestments();
+    setupTheme();
 }
 
-function loadData() {
+function setupTheme() {
+    const theme = Storage.get(STORAGE_KEYS.THEME, 'light');
+    if (theme === 'dark') document.body.classList.add('dark');
+}
+
+// Initialize Lucide icons
+if (window.lucide) {
+    lucide.createIcons();
+}
+
+async function loadData() {
+    // 1. Default load from LocalStorage (fast, works offline/guest)
     State.transactions = Storage.get(STORAGE_KEYS.TRANSACTIONS, []);
     State.categories = Storage.get(STORAGE_KEYS.CATEGORIES, DEFAULT_CATEGORIES);
     State.installments = Storage.get(STORAGE_KEYS.INSTALLMENTS, []);
@@ -96,12 +132,32 @@ function loadData() {
     State.investments = Storage.get(STORAGE_KEYS.INVESTMENTS, []);
     State.monthlyLimits = Storage.get(STORAGE_KEYS.LIMITS, {});
 
-    // Theme
+    // 2. If Logged In, try to fetch Cloud Data and overwrite
+    if (AuthService.isLoggedIn) {
+        const cloud = await AuthService.loadData();
+        if (cloud.success && cloud.data) {
+            const d = cloud.data;
+            // Overwrite if data exists in cloud
+            if (d.transactions) State.transactions = d.transactions;
+            if (d.categories) State.categories = d.categories;
+            if (d.installments) State.installments = d.installments;
+            if (d.goals) State.goals = d.goals;
+            if (d.todos) State.todos = d.todos;
+            if (d.investments) State.investments = d.investments;
+            if (d.limits) State.monthlyLimits = d.limits;
+            console.log("Loaded data from Cloud");
+        } else {
+            console.log("Could not load cloud data or empty");
+        }
+    }
+
+    // Theme (Local preference usually best, but can sync if needed)
     const theme = Storage.get(STORAGE_KEYS.THEME, 'light');
     if (theme === 'dark') document.body.classList.add('dark');
 }
 
 function saveData(key) {
+    // 1. Always save to LocalStorage (as cache or guest mode)
     if (key === 'transactions') Storage.set(STORAGE_KEYS.TRANSACTIONS, State.transactions);
     if (key === 'categories') Storage.set(STORAGE_KEYS.CATEGORIES, State.categories);
     if (key === 'installments') Storage.set(STORAGE_KEYS.INSTALLMENTS, State.installments);
@@ -109,6 +165,25 @@ function saveData(key) {
     if (key === 'todos') Storage.set(STORAGE_KEYS.TODOS, State.todos);
     if (key === 'investments') Storage.set(STORAGE_KEYS.INVESTMENTS, State.investments);
     if (key === 'limits') Storage.set(STORAGE_KEYS.LIMITS, State.monthlyLimits);
+
+    // 2. If Logged In -> Push to Cloud
+    if (AuthService.isLoggedIn) {
+        // Debounce could be good here, but for now direct save
+        const fullData = {
+            transactions: State.transactions,
+            categories: State.categories,
+            installments: State.installments,
+            goals: State.goals,
+            todos: State.todos,
+            investments: State.investments,
+            limits: State.monthlyLimits
+        };
+        // Async save (don't await to not block UI)
+        AuthService.saveData(fullData).then(res => {
+            if (res.success) console.log("Saved to Cloud");
+            else console.error("Cloud Save Failed", res);
+        });
+    }
 }
 
 // --- DOM References ---
@@ -265,6 +340,10 @@ function setupEventListeners() {
         if ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R')) {
             e.preventDefault(); // Prevent page reload
             openTransactionModal();
+            setTimeout(() => {
+                const amountInput = document.getElementById('trans-amount');
+                if (amountInput) amountInput.focus();
+            }, 100);
         }
     });
 
@@ -283,6 +362,7 @@ function setupEventListeners() {
 
     setupAccumulationListeners();
     setupInvestmentListeners();
+    setupAuthListeners();
 
     const updateBulkHint = () => {
         const val = bulkInput.value;
@@ -480,6 +560,15 @@ window.updateCategoryColor = (id, newColor) => {
     }
 };
 
+window.updateCategoryLimit = (id, newLimit) => {
+    const cat = State.categories.find(c => c.id === id);
+    if (cat) {
+        cat.budgetLimit = parseFloat(newLimit) || 0;
+        saveData('categories');
+        renderDashboard();
+    }
+};
+
 // --- Modal Handlers for Accumulation ---
 
 // --- Modal Handlers for Accumulation ---
@@ -490,7 +579,7 @@ function openGoalModal(id = null) {
     document.getElementById('goal-id').value = '';
     document.getElementById('goal-modal-title').textContent = 'Thêm mục tiêu';
     document.getElementById('btn-delete-goal').classList.add('hidden');
-    document.getElementById('goal-color').value = '#10b981';
+    document.getElementById('goal-color').value = getUniqueColor(State.goals);
 
     // Switch to Info Tab by default
     switchGoalModalTab('goal-info');
@@ -1080,29 +1169,49 @@ function renderHistory() {
 // --- Modals & Forms Handlers ---
 
 function openModal(name) {
-    if (name === 'transaction') els.modalTransaction.classList.remove('hidden');
-    if (name === 'limit') {
-        const month = State.currentDate.getMonth() + 1;
-        const year = State.currentDate.getFullYear();
-        document.getElementById('limit-month-display').textContent = `${month}/${year}`;
-        const key = `${year}-${String(month).padStart(2, '0')}`;
-        document.getElementById('limit-amount').value = State.monthlyLimits[key] || '';
-        els.modalLimit.classList.remove('hidden');
-    }
-    if (name === 'categories') {
+    let modal;
+    if (name === 'transaction') {
+        modal = els.modalTransaction;
+    } else if (name === 'limit') {
+        modal = els.modalLimit;
+        // Render current month display
+        const today = new Date();
+        const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+        document.getElementById('limit-month-display').textContent = `${today.getMonth() + 1}/${today.getFullYear()}`;
+        document.getElementById('limit-amount').value = State.monthlyLimits[monthKey] || '';
+
+        // Render category limits inputs
+        const catList = document.getElementById('limit-category-list');
+        if (catList) {
+            catList.innerHTML = State.categories.map(c => `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                    <span style="font-size:0.875rem; font-weight:500; color:var(--text-main); display:flex; align-items:center; gap:0.5rem;">
+                        <div style="width:12px; height:12px; border-radius:50%; background:${c.color}"></div>
+                        ${c.name}
+                    </span>
+                    <div class="input-wrapper" style="width: 150px;">
+                            <input type="number" class="cat-limit-input" data-id="${c.id}" value="${c.budgetLimit || ''}" placeholder="0" style="text-align:right;">
+                            <span class="currency">VND</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+    } else if (name === 'categories') {
+        modal = els.modalCategories;
         renderCategorySettings();
-        els.modalCategories.classList.remove('hidden');
-    }
-    if (name === 'installment') {
+    } else if (name === 'installment') {
+        modal = els.modalInstallment;
         els.formInstallment.reset();
         document.getElementById('inst-id').value = '';
         document.getElementById('inst-modal-title').textContent = 'Thêm trả góp';
-        els.modalInstallment.classList.remove('hidden');
-    }
-    if (name === 'bulk-delete') {
-        document.getElementById('modal-bulk-delete').classList.remove('hidden');
+    } else if (name === 'bulk-delete') {
+        modal = document.getElementById('modal-bulk-delete');
         // Trigger generic update to show hint default
         document.getElementById('bulk-delete-type').dispatchEvent(new Event('change'));
+    }
+
+    if (modal) {
+        modal.classList.remove('hidden');
     }
 }
 
@@ -1202,13 +1311,32 @@ function handleTransactionSubmit(e) {
 
 function handleLimitSubmit(e) {
     e.preventDefault();
-    const amount = parseFloat(document.getElementById('limit-amount').value);
-    const month = State.currentDate.getMonth() + 1;
-    const year = State.currentDate.getFullYear();
-    const key = `${year}-${String(month).padStart(2, '0')}`;
+    const amount = parseFloat(document.getElementById('limit-amount').value) || 0;
+    const today = new Date();
+    const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
 
-    State.monthlyLimits[key] = amount;
-    saveData('limits');
+    State.monthlyLimits[monthKey] = amount;
+    saveData('monthly_limits');
+
+    // Save category limits
+    const catInputs = document.querySelectorAll('.cat-limit-input');
+    let hasChanges = false;
+    catInputs.forEach(input => {
+        const id = input.getAttribute('data-id');
+        const limitVal = parseFloat(input.value) || 0;
+        const cat = State.categories.find(c => c.id === id);
+        if (cat && cat.budgetLimit !== limitVal) {
+            cat.budgetLimit = limitVal;
+            hasChanges = true;
+        }
+    });
+
+    if (hasChanges) {
+        saveData('categories');
+    }
+
+    renderDashboard();
+    // renderBarChart(); // Assuming this function exists and should be called
     els.modalLimit.classList.add('hidden');
     renderDateDisplay();
 }
@@ -1327,7 +1455,18 @@ function renderInstallments() {
         return;
     }
 
-    grid.innerHTML = State.installments.map(inst => {
+    let totalMonthlyPayment = 0;
+
+    // First pass to calculate total
+    State.installments.forEach(inst => {
+        const monthly = (inst.totalValue / inst.term) + (inst.totalValue * (inst.interestRate / 100));
+        const paid = inst.paidMonths || 0;
+        if (paid < inst.term) {
+            totalMonthlyPayment += monthly;
+        }
+    });
+
+    const itemsHtml = State.installments.map(inst => {
         const monthly = (inst.totalValue / inst.term) + (inst.totalValue * (inst.interestRate / 100));
         const paid = inst.paidMonths || 0;
         const percent = (paid / inst.term) * 100;
@@ -1373,7 +1512,41 @@ function renderInstallments() {
             </div>
         `;
     }).join('');
+
+    const summaryHtml = `
+        <div style="margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:center; background:var(--bg-card); padding:1rem; border-radius:1rem; border:1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+            <div>
+                 <div style="font-size:0.875rem; color:var(--text-muted); font-weight:500;">Tổng phải trả tháng này</div>
+                 <div style="font-size:1.5rem; font-weight:800; color:var(--primary);">${formatCurrency(totalMonthlyPayment)}</div>
+            </div>
+            <button class="btn-primary" onclick="payAllInstallmentsOneMonth()">
+                <i data-lucide="check-circle-2"></i> Xác nhận đã trả 1 kỳ
+            </button>
+        </div>
+    `;
+
+    grid.innerHTML = summaryHtml + itemsHtml;
 }
+
+window.payAllInstallmentsOneMonth = function () {
+    // Check if there are any active installments
+    const active = State.installments.filter(i => (i.paidMonths || 0) < i.term);
+
+    if (active.length === 0) {
+        alert("Không có khoản trả góp nào cần trả!");
+        return;
+    }
+
+    if (confirm(`Xác nhận đánh dấu ĐÃ TRẢ khoản tiền tháng này cho ${active.length} hạng mục?`)) {
+        active.forEach(i => {
+            i.paidMonths = (i.paidMonths || 0) + 1;
+        });
+        saveData('installments');
+        renderInstallments();
+        alert("Đã cập nhật thành công!");
+    }
+};
+
 
 function handleInstallmentSubmit(e) {
     e.preventDefault();
@@ -1450,8 +1623,19 @@ function renderPieChart() {
     sortedCats.forEach(catId => {
         const cat = State.categories.find(c => c.id === catId);
         if (cat) {
-            labels.push(`${cat.name} (${formatCurrency(catTotals[catId])})`);
-            data.push(catTotals[catId]);
+            const limit = cat.budgetLimit || 0;
+            const currentTotal = catTotals[catId];
+            const isOver = limit > 0 && currentTotal > limit;
+
+            let label = `${cat.name} (${formatCurrency(currentTotal)})`;
+            if (isOver) {
+                const overAmount = currentTotal - limit;
+                // Display Total Spent AND Over Amount
+                label = `${cat.name} (${formatCurrency(currentTotal)}) ⚠️ Vượt ${formatCurrency(overAmount)}`;
+            }
+
+            labels.push(label);
+            data.push(currentTotal);
             colors.push(cat.color);
         } else {
             labels.push(`Khác (${formatCurrency(catTotals[catId])})`);
@@ -1482,16 +1666,27 @@ function renderPieChart() {
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            cutout: '70%',
             plugins: {
                 legend: {
                     position: 'right',
                     labels: {
                         usePointStyle: true,
-                        boxWidth: 8
+                        boxWidth: 12,
+                        font: {
+                            size: 14
+                        }
+                    }
+                },
+                tooltip: {
+                    bodyFont: {
+                        size: 14
+                    },
+                    titleFont: {
+                        size: 14
                     }
                 }
-            },
-            cutout: '70%'
+            }
         }
     });
 }
@@ -1859,6 +2054,9 @@ function renderInvestments() {
     const totalNet = totalRevenue - totalInvested; // Lời/Lỗ = Thu - Chi
     const isNetProfit = totalNet >= 0;
 
+    // Monthly Target Total
+    const totalMonthlyTarget = State.investments.reduce((sum, i) => sum + (i.monthlyTarget || 0), 0);
+
     if (summaryBoard) {
         summaryBoard.innerHTML = `
            <div class="stat-card-gradient" style="background: linear-gradient(to right, #3b82f6, #2563eb);">
@@ -1875,7 +2073,15 @@ function renderInvestments() {
                <h3 class="stat-card-title">Tổng Lời/Lỗ</h3>
                <p class="stat-card-value">${isNetProfit ? '+' : ''}${formatCurrency(totalNet)}</p>
            </div>
+
+           <div class="stat-card-gradient" style="background: linear-gradient(to right, #0ea5e9, #0284c7);">
+               <h3 class="stat-card-title">Kế hoạch mỗi tháng</h3>
+               <p class="stat-card-value">${formatCurrency(totalMonthlyTarget)}</p>
+               <p class="stat-card-sub">Tổng tiền cần đầu tư định kỳ</p>
+           </div>
         `;
+        // Adjust grid columns
+        summaryBoard.style.gridTemplateColumns = 'repeat(auto-fit, minmax(200px, 1fr))';
     }
 
     // --- Grid ---
@@ -1918,8 +2124,8 @@ function renderInvestments() {
                         <span style="font-weight:600">${formatCurrency(inv.invested || 0)}</span>
                     </div>
                     <div>
-                        <span style="color:var(--text-muted)">Tổng Thu:</span>
-                         <span style="font-weight:600">${formatCurrency(inv.revenue || 0)}</span>
+                        <span style="color:var(--text-muted)">Mỗi tháng:</span>
+                         <span style="font-weight:600">${formatCurrency(inv.monthlyTarget || 0)}</span>
                     </div>
                 </div>
             </div>
@@ -2037,7 +2243,8 @@ window.openInvestmentModal = function (id = null, viewMode = 'full') {
     document.getElementById('form-inv-transaction').reset();
     document.getElementById('inv-id').value = '';
     document.getElementById('inv-modal-title').textContent = 'Thêm danh mục';
-    document.getElementById('inv-color').value = '#8b5cf6';
+    document.getElementById('inv-color').value = getUniqueColor(State.investments);
+    document.getElementById('inv-target').value = '';
 
     // Manage Tabs Visibility based on viewMode
     const modalTabs = document.querySelector('#modal-investment .modal-tabs');
@@ -2076,6 +2283,7 @@ window.openInvestmentModal = function (id = null, viewMode = 'full') {
         if (inv) {
             document.getElementById('inv-id').value = inv.id;
             document.getElementById('inv-name').value = inv.name;
+            document.getElementById('inv-target').value = inv.monthlyTarget || '';
             document.getElementById('inv-color').value = inv.color || '#8b5cf6';
             document.getElementById('inv-modal-title').textContent = 'Chi tiết đầu tư';
 
@@ -2113,12 +2321,16 @@ function renderInvestmentHistory(inv) {
         // dOut (Chi), dIn (Thu)
         const dOut = h.out || 0;
         const dIn = h.in || 0;
+        const noteHtml = h.note ? `<div style="font-weight:600; margin-bottom:0.25rem;">${h.note}</div>` : '';
         return `
             <div style="padding:0.5rem; border-bottom:1px solid var(--border); font-size:0.85rem;">
-                <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem;">
+                ${noteHtml}
+                <div style="display:flex; justify-content:space-between; align-items:center;">
                      <span style="color:var(--text-muted)">${new Date(h.date).toLocaleString('vi-VN')}</span>
-                     ${dOut > 0 ? `<span style="color:var(--danger); font-weight:600;">- Chi: ${formatCurrency(dOut)}</span>` : ''}
-                     ${dIn > 0 ? `<span style="color:var(--success); font-weight:600;">+ Thu: ${formatCurrency(dIn)}</span>` : ''}
+                     <div>
+                         ${dOut > 0 ? `<span style="color:var(--danger); font-weight:600; margin-left:0.5rem;">- Chi: ${formatCurrency(dOut)}</span>` : ''}
+                         ${dIn > 0 ? `<span style="color:var(--success); font-weight:600; margin-left:0.5rem;">+ Thu: ${formatCurrency(dIn)}</span>` : ''}
+                     </div>
                 </div>
             </div>
         `;
@@ -2160,18 +2372,21 @@ function handleInvestmentSubmit(e) {
     const id = document.getElementById('inv-id').value;
     const name = document.getElementById('inv-name').value;
     const color = document.getElementById('inv-color').value;
+    const target = parseFloat(document.getElementById('inv-target').value) || 0;
 
     if (id) {
         const inv = State.investments.find(x => x.id === id);
         if (inv) {
             inv.name = name;
             inv.color = color;
+            inv.monthlyTarget = target;
         }
     } else {
         State.investments.push({
             id: generateId(),
             name,
             color,
+            monthlyTarget: target,
             invested: 0,
             revenue: 0,
             history: []
@@ -2192,6 +2407,7 @@ function handleInvestmentTransaction(e) {
 
     const dOut = parseFloat(document.getElementById('inv-trans-out').value) || 0; // Chi
     const dIn = parseFloat(document.getElementById('inv-trans-in').value) || 0;   // Thu
+    const note = document.getElementById('inv-trans-note').value.trim();
 
     if (dOut === 0 && dIn === 0) return;
 
@@ -2203,7 +2419,8 @@ function handleInvestmentTransaction(e) {
     inv.history.push({
         date: new Date().toISOString(),
         out: dOut,
-        in: dIn
+        in: dIn,
+        note: note
     });
 
     saveData('investments');
@@ -2221,6 +2438,147 @@ function setupInvestmentListeners() {
     document.querySelectorAll('.modal-tab').forEach(btn => {
         if (btn.dataset.modalTab && btn.dataset.modalTab.startsWith('inv-')) {
             btn.addEventListener('click', () => switchInvestmentModalTab(btn.dataset.modalTab));
+        }
+    });
+}
+
+// --- Auth UI Logic ---
+function updateAuthUI() {
+    const btnLogin = document.getElementById('btn-login-sidebar');
+    const statusArea = document.getElementById('user-status-area');
+
+    if (AuthService.isLoggedIn && AuthService.currentUser) {
+        // Logged In State
+        btnLogin.innerHTML = `
+            <i data-lucide="log-out"></i>
+            <span>Đăng xuất</span>
+        `;
+        btnLogin.onclick = () => {
+            if (confirm('Đăng xuất khỏi tài khoản này?')) {
+                AuthService.logout();
+            }
+        };
+
+        statusArea.innerHTML = `
+            <div class="user-badge">
+                <i data-lucide="user"></i>
+                <span>${AuthService.currentUser.username}</span>
+            </div>
+        `;
+    } else {
+        // Guest State
+        btnLogin.innerHTML = `
+            <i data-lucide="log-in"></i>
+            <span>Đăng nhập / Cloud</span>
+        `;
+        btnLogin.onclick = () => {
+            document.getElementById('auth-modal').classList.remove('hidden');
+        };
+
+        statusArea.innerHTML = '';
+    }
+    if (window.lucide) lucide.createIcons();
+}
+
+function setupAuthListeners() {
+    const modal = document.getElementById('auth-modal');
+    const btnClose = document.getElementById('btn-auth-close');
+    const btnSubmit = document.getElementById('btn-auth-submit');
+    const btnSwitch = document.getElementById('btn-switch-mode');
+
+    // Safety checks
+    if (!modal || !btnClose || !btnSubmit || !btnSwitch) {
+        console.error("Auth elements missing from DOM");
+        return;
+    }
+
+    // Inputs
+    const inputUrl = document.getElementById('auth-api-url');
+    const inputUser = document.getElementById('auth-username');
+    const inputPass = document.getElementById('auth-password');
+    const title = document.getElementById('auth-title');
+    const switchText = document.getElementById('auth-switch-text');
+
+    let isRegisterMode = false;
+
+    // Init URL safely
+    try {
+        if (inputUrl && AuthService) {
+            inputUrl.value = AuthService.getApiUrl();
+        }
+    } catch (e) {
+        console.error("Error setting API URL", e);
+    }
+
+    // Use addEventListener to prevent overwrites
+    const closeModal = () => modal.classList.add('hidden');
+
+    btnClose.addEventListener('click', closeModal);
+
+    const btnCloseX = document.getElementById('btn-auth-close-x');
+    if (btnCloseX) {
+        btnCloseX.addEventListener('click', closeModal);
+    }
+
+    btnSwitch.addEventListener('click', () => {
+        isRegisterMode = !isRegisterMode;
+        if (isRegisterMode) {
+            title.textContent = 'Đăng ký tài khoản';
+            btnSubmit.textContent = 'Đăng ký';
+            switchText.textContent = 'Đã có tài khoản?';
+            btnSwitch.textContent = 'Đăng nhập ngay';
+        } else {
+            title.textContent = 'Đăng nhập';
+            btnSubmit.textContent = 'Đăng nhập';
+            switchText.textContent = 'Chưa có tài khoản?';
+            btnSwitch.textContent = 'Đăng ký ngay';
+        }
+    });
+
+    btnSubmit.addEventListener('click', async () => {
+        const url = inputUrl.value.trim();
+        const u = inputUser.value.trim();
+        const p = inputPass.value.trim();
+
+        if (!url || !u || !p) {
+            alert("Vui lòng nhập đầy đủ thông tin: URL, Tài khoản, Mật khẩu!");
+            return;
+        }
+
+        AuthService.setApiUrl(url);
+
+        const originalText = btnSubmit.textContent;
+        btnSubmit.textContent = 'Đang xử lý...';
+        btnSubmit.disabled = true;
+
+        try {
+            let res;
+            if (isRegisterMode) {
+                res = await AuthService.register(u, p);
+                if (res.success) {
+                    alert("Đăng ký thành công! Vui lòng đăng nhập.");
+                    // Switch to login
+                    btnSwitch.click();
+                } else {
+                    alert("Lỗi đăng ký: " + (res.message || "Không xác định"));
+                }
+            } else {
+                res = await AuthService.login(u, p);
+                if (res.success) {
+                    alert("Đăng nhập thành công!");
+                    closeModal();
+                    // Reload data from cloud
+                    await init();
+                } else {
+                    alert("Lỗi đăng nhập: " + (res.message || "Sai thông tin hoặc lỗi backend"));
+                }
+            }
+        } catch (err) {
+            console.error("Auth Action Error", err);
+            alert("Đã xảy ra lỗi khi kết nối. Vui lòng thử lại.");
+        } finally {
+            btnSubmit.textContent = originalText;
+            btnSubmit.disabled = false;
         }
     });
 }
