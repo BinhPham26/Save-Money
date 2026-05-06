@@ -101,6 +101,7 @@ select:focus {
     font-size: 1.5rem;
     background: linear-gradient(to right, #4f46e5, #9333ea);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
     font-weight: 800;
 }
@@ -466,7 +467,7 @@ body.dark .mode-btn.active {
 }
 
 .modal.small-modal {
-    max-width: 350px;
+    max-width: 450px;
 }
 
 .btn-primary {
@@ -533,26 +534,28 @@ body.dark .mode-btn.active {
     border-color: var(--primary);
 }
 
+/* Input Wrapper */
 .input-wrapper {
     position: relative;
     display: flex;
     align-items: center;
+    width: 100%;
 }
 
-.input-wrapper.center {
-    justify-content: center;
-}
-
-.input-wrapper.center input {
-    text-align: center;
+.input-wrapper input {
+    padding-right: 3rem !important;
+    /* Make space for suffix */
 }
 
 .currency {
     position: absolute;
-    right: 0;
-    bottom: 1rem;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
     color: var(--text-muted);
     font-weight: 600;
+    pointer-events: none;
+    font-size: 0.875rem;
 }
 
 .form-row {
@@ -657,6 +660,7 @@ input[type=number]::-webkit-outer-spin-button {
 
 input[type=number] {
     -moz-appearance: textfield;
+    appearance: textfield;
 }
 
 /* Search Bar styling */
@@ -882,4 +886,25 @@ input[type=number] {
 
 .btn-icon-sm:focus {
     outline: none;
+}
+
+/* Color Picker Mini */
+.color-picker-mini {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    padding: 0;
+    overflow: hidden;
+    cursor: pointer;
+    background: none;
+}
+
+.color-picker-mini::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+.color-picker-mini::-webkit-color-swatch {
+    border: 1px solid var(--border);
+    border-radius: 50%;
 }
